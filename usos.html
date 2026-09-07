@@ -395,8 +395,8 @@ hr.dp-sep{border:none;border-top:1px solid var(--border);margin:.75rem 0}
   <div class="fg">
     <label>Estado</label>
     <select id="f-estado">
-      <option value="">Todos</option>
-      <option value="AUT" selected>✅ Autorizada</option>
+      <option value="" selected>Todos</option>
+      <option value="AUT">✅ Autorizada</option>
       <option value="CANC">🚫 Todas as Canceladas</option>
       <option value="CVP">🟡 Cancelada — Venda Permitida</option>
       <option value="CVIP">🟠 Cancelada — Venda Interdita / Util. Permitida</option>
@@ -611,54 +611,31 @@ function toggleFavoriteAt(idx){
 
 async function init(){
   await loadFavorites();
-  const defaultKey=document.getElementById('f-estado').value; // "AUT" por defeito
-
   showLoading('A verificar dados em cache…');
   try{
-    if(defaultKey){
-      const c=await dbGet('data_'+defaultKey);
-      if(c&&c.length){ DATASETS[defaultKey]=c; hideLoading(); showApp(); return; }
-    }else{
-      // "Todos" foi escolhido manualmente antes (URL/estado gravado) — aí sim, carrega tudo
-      const results=await Promise.all(
-        ESTADOS.map(est=>dbGet('data_'+est.key).then(c=>({key:est.key,c})).catch(()=>({key:est.key,c:null})))
-      );
-      let found=false;
-      for(const {key,c} of results){ if(c&&c.length){DATASETS[key]=c;found=true;} }
-      if(found){ hideLoading(); showApp(); return; }
-    }
+    const results=await Promise.all(
+      ESTADOS.map(est=>dbGet('data_'+est.key).then(c=>({key:est.key,c})).catch(()=>({key:est.key,c:null})))
+    );
+    let found=false;
+    for(const {key,c} of results){ if(c&&c.length){DATASETS[key]=c;found=true;} }
+    if(found){ hideLoading(); showApp(); return; }
   }catch(e){ console.warn(e); }
 
-  // Sem cache — tenta carregar do servidor só o necessário para arrancar
+  // Sem cache — tenta carregar os JSON do servidor automaticamente
   showLoading('A carregar dados do servidor…');
-  if(defaultKey){
-    const est=ESTADO_BY_KEY[defaultKey];
+  const fetched=await Promise.all(ESTADOS.map(async est=>{
     try{
       const r=await fetch('./'+est.file,{cache:'no-cache'});
-      if(r.ok){
-        const json=await r.json();
-        const records=Array.isArray(json)?json:(json.records||json);
-        records.forEach(rec=>{if(!rec.estado)rec.estado=est.label;});
-        DATASETS[defaultKey]=records;
-        dbSet('data_'+defaultKey,records).catch(()=>{});
-        hideLoading(); showApp(); return;
-      }
-    }catch(e){ /* ficheiro não disponível (local) — ignora */ }
-  }else{
-    const fetched=await Promise.all(ESTADOS.map(async est=>{
-      try{
-        const r=await fetch('./'+est.file,{cache:'no-cache'});
-        if(!r.ok) return null;
-        const json=await r.json();
-        const records=Array.isArray(json)?json:(json.records||json);
-        records.forEach(rec=>{if(!rec.estado)rec.estado=est.label;});
-        DATASETS[est.key]=records;
-        dbSet('data_'+est.key,records).catch(()=>{});
-        return est.key;
-      }catch(e){ return null; }
-    }));
-    if(fetched.filter(Boolean).length>0){ hideLoading(); showApp(); return; }
-  }
+      if(!r.ok) return null;
+      const json=await r.json();
+      const records=Array.isArray(json)?json:(json.records||json);
+      records.forEach(rec=>{if(!rec.estado)rec.estado=est.label;});
+      DATASETS[est.key]=records;
+      dbSet('data_'+est.key,records).catch(()=>{});
+      return est.key;
+    }catch(e){ return null; /* ficheiro não disponível (local) — ignora */ }
+  }));
+  if(fetched.filter(Boolean).length>0){ hideLoading(); showApp(); return; }
 
   // Nada funcionou — mostra ecrã de importação manual
   hideLoading();
@@ -912,15 +889,23 @@ async function showApp(){
   await ensureDatasetsForEstado(document.getElementById('f-estado').value);
   rebuildALL();
   updateHeaderMeta();
-  buildSelects();
   document.getElementById('toolbar').classList.add('active');
   document.getElementById('legend-bar').classList.add('active');
   document.getElementById('validade-bar').classList.add('active');
-  loadChangesBanner();
-  updateValidadeBar();
+
+  // Mostra já a tabela com os dados que já temos — não espera pelas
+  // listas de filtros (Cultura/Inimigo/Nome Científico), que exigem
+  // percorrer os 130 mil registos e só servem depois de já se ver algo no ecrã.
+  applyFilters();
   requestAnimationFrame(updateStickyTop);
   window.addEventListener('resize',updateStickyTop);
-  applyFilters();
+
+  // Trabalho pesado, adiado para depois da primeira pintura da tabela
+  setTimeout(()=>{
+    buildSelects();
+    updateValidadeBar();
+    loadChangesBanner();
+  },0);
 }
 
 /* Lê todos os filtros ativos e guarda-os na URL (sem recarregar a página),
